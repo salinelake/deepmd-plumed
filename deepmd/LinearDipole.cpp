@@ -3,8 +3,11 @@
 namespace PLMD {
 namespace colvar {
 
+// std::array<std::string, 3> 
+// LinearDipole::cpnts = {"x", "y", "z"};
 
-PLUMED_REGISTER_ACTION(LinearDipole,"LinearDipole")
+
+PLUMED_REGISTER_ACTION(LinearDipole,"LINEARDIPOLE")
 void
 LinearDipole::
 registerKeywords(Keywords& keys) {
@@ -40,13 +43,14 @@ load_borns(std::vector<double> & borns, const std::string & filename ) {
   }
 }
 
+
 LinearDipole::
 LinearDipole(const ActionOptions&ao):
   PLUMED_COLVAR_INIT(ao),
-  nopbc(false)
+  nopbc(false),
   components(true)
 {
-  // parseFlag("COMPONENTS",components);
+
   parseAtomList("ATOMS",atoms);
   parseFlag("NOPBC",nopbc);
   std::string bonds_file;
@@ -80,18 +84,23 @@ LinearDipole(const ActionOptions&ao):
 
   // load bonds topology
   load_bonds(bonds, bonds_file);
-  log.printf("  assign bonds to atoms\n");
-  for(unsigned i = 0; i < bonds.size()/2; ++i) {
-    log.printf(" (%d, %d) ", bonds[2*i], bonds[2*i+1]);
-  }
-  log.printf("  \n");
-
-  // load bonds topology
-  load_bonds(borns, borns_file);
-  log.printf("  assign Born tensor to bonds\n");
-  // for(unsigned i = 0; i < borns.size(); ++i) {
-  //   log.printf("  %d", borns[i]);
+  // log.printf("  assign bonds to atoms\n");
+  // for(unsigned i = 0; i < bonds.size()/2; ++i) {
+  //   log.printf(" (%d, %d) ", bonds[2*i], bonds[2*i+1]);
   // }
+  // log.printf("  \n");
+
+  // load born tensor
+  load_borns(borns, borns_file);
+  if (bonds.size()/2 != borns.size()/9){
+    log.printf("#Bonds and #Borns tensor do not match");
+  }
+  log.printf("  assign Born tensor to bonds\n");
+  for(unsigned i = 0; i < borns.size()/9; ++i) {
+    log.printf(" (%d, %d) :", bonds[2*i], bonds[2*i+1]);
+    for(unsigned j = 0; j < 9; ++j){ log.printf(" %f ", borns[9*i+j]); };
+    log.printf("  \n ");
+  }
   log.printf("  \n");
 
   // by default all components require derivarives
@@ -106,8 +115,8 @@ LinearDipole(const ActionOptions&ao):
 void LinearDipole::calculate()
 {
   unsigned natoms = getNumberOfAtoms();
-  unsigned nbonds = bonds.size/2;
-  unsigned adof = natoms * 3  // atomic degrees of freedom
+  unsigned nbonds = bonds.size()/2;
+  unsigned adof = natoms * 3;  // atomic degrees of freedom
   std::vector<double> _dipole( odim, 0);
   std::vector<double> _force ( odim * adof, 0);
   std::vector<double> _virial( odim * 9, 0);
@@ -115,15 +124,13 @@ void LinearDipole::calculate()
   for(unsigned i = 0; i < nbonds; ++i) {
     int atom1 = bonds[2*i];
     int atom2 = bonds[2*i+1];
-    std::vector<double> r1 = getPosition(atom1);
-    std::vector<double> r2 = getPosition(atom2);
-    std::vector<double> r12(3);
+    Vector r1 = getPosition(atom1) ;
+    Vector r2 = getPosition(atom2) ;
+    Vector r12;
     if(!nopbc) {
         r12 = pbcDistance(r1,r2);
       } else{
-        for(unsigned j = 0; j < 3; ++j) {
-          r12[j] = r2[j] - r1[j];
-          };
+        r12 = r2 - r1;
       }
     for(unsigned j = 0; j < odim; ++j) {
       std::vector<double> born_vector(borns.begin() + odim*3*i + 3*j, borns.begin() + odim*3*i + 3*(j+1)); // borns[idx_bond, j, *]
@@ -140,13 +147,18 @@ void LinearDipole::calculate()
           }
       }
     }
+    // debug
+    // log.printf(" computing the bonds dipole of (%d, %d) \n", atom1, atom2);
+    // log.printf(" coordinates r1 = (%f, %f, %f), r2 = (%f, %f, %f) \n", r1[0],r1[1],r1[2], r2[0],r2[1],r2[2]);
+    // log.printf(" PBC_Distance r12 = (%f, %f, %f)  \n", r12[0],r12[1],r12[2] );
+    // log.printf(" current dipole = (%f, %f, %f)  \n", _dipole[0],_dipole[1],_dipole[2] );
   }
   // get global dipole
-  for (unsigned j = 0; j < ODIM; ++j) {
+  for (unsigned j = 0; j < odim; ++j) {
     getPntrToComponent(j)->set(_dipole[j]);
   };
   // get atomic detivative = minus force
-  for (unsigned j = 0; j < ODIM; ++j) {
+  for (unsigned j = 0; j < odim; ++j) {
     for(unsigned n = 0; n < natoms; ++n) {
       setAtomsDerivatives(
         getPntrToComponent(j), n,
@@ -157,8 +169,7 @@ void LinearDipole::calculate()
     };
   };
   // get box derivative = minus virial
-  for (unsigned j = 0; j < ODIM; ++j) {
-    
+  for (unsigned j = 0; j < odim; ++j) {
     setBoxDerivatives(
       getPntrToComponent(j), // what is plumed's convention?
       - Tensor(_virial[j*9 +0], _virial[j*9 +1], _virial[j*9 +2],

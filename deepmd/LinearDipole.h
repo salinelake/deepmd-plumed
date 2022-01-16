@@ -1,33 +1,27 @@
+#pragma once
 #include "Common.h"
-#include "Colvar.h"
-#include "ActionRegister.h"
+#include "colvar/Colvar.h"
+#include "colvar/ActionRegister.h"
+#include "core/PlumedMain.h"
 
 #include <string>
 #include <cmath>
 
+constexpr unsigned int odim = 3;
+const std::array<std::string, odim> cpnts = {"x", "y", "z"};
+
 namespace PLMD {
 namespace colvar {
- 
-constexpr unsigned int ODIM = 3;
-const std::array<std::string, ODIM> cpnts = {"x", "y", "z"};
-
- //+PLUMEDOC COLVAR DIPOLE
+ //+PLUMEDOC COLVAR LinearDipole
 /*
 Calculate a 3D collective variable for a group of atoms, linearly dependent on the displacement between atoms.
-
-When running with periodic boundary conditions, the atoms should be
-in the proper periodic image. This is done automatically since PLUMED 2.5,
-by considering the ordered list of atoms and rebuilding the molecule with a procedure
-that is equivalent to that done in \ref WHOLEMOLECULES . Notice that
-rebuilding is local to this action. This is different from \ref WHOLEMOLECULES
-which actually modifies the coordinates stored in PLUMED.
 
  \par Examples
 
 The following tells plumed to calculate the dipole of the group of atoms containing
 the atoms from 1-10 and print it every 5 steps
 \plumedfile
-d: DIPOLE GROUP=1-10
+d: LinearDipole
 PRINT FILE=output STRIDE=5 ARG=d
 \endplumedfile
 
@@ -35,24 +29,22 @@ PRINT FILE=output STRIDE=5 ARG=d
 //+ENDPLUMEDOC
 
 class LinearDipole : public Colvar {
-  std::vector<AtomNumber> atoms; 
-  bool components;
-  bool nopbc;
-  int  odim = ODIM;
-  std::vector<int> bonds;
-  std::vector<double> borns;
 public:
   explicit LinearDipole (const ActionOptions&);
   void calculate () override;
   static void registerKeywords (Keywords& keys);
 protected:
+  std::vector<AtomNumber> atoms; 
+  bool components;
+  bool nopbc;
   std::vector<int> model;
 private:
+  std::vector<int> bonds;
+  std::vector<double> borns;
   void load_bonds(std::vector<int> & bonds, 
            const std::string & filename );
   void load_borns(std::vector<double> & borns, 
            const std::string & filename );
-
 };
 
 
