@@ -31,9 +31,9 @@ load_bonds(std::vector<int> & bonds, const std::string & filename ) {
 
 void
 LinearDipole::
-load_borns(std::vector<FLOAT_PREC> & borns, const std::string & filename ) {
+load_borns(std::vector<double> & borns, const std::string & filename ) {
   std::ifstream fin(filename);
-  FLOAT_PREC element;
+  double element;
   borns.clear();
   while (fin >> element) {
     borns.push_back(element);
@@ -107,17 +107,17 @@ void LinearDipole::calculate()
 {
   unsigned natoms = getNumberOfAtoms();
   unsigned nbonds = bonds.size/2;
-  unsigned adof = natoms * 3  // atomic degree of freedom
-  std::vector<FLOAT_PREC> _dipole( odim );
-  std::vector<FLOAT_PREC> _force ( odim * adof);
-  std::vector<FLOAT_PREC> _virial( odim * 9);
-  // iterate over all bonds, accumulate dipole and force
+  unsigned adof = natoms * 3  // atomic degrees of freedom
+  std::vector<double> _dipole( odim, 0);
+  std::vector<double> _force ( odim * adof, 0);
+  std::vector<double> _virial( odim * 9, 0);
+  // iterate over all bonds, accumulate dipole, force and virial
   for(unsigned i = 0; i < nbonds; ++i) {
-    int atom1 = bonds[2*i]
-    int atom2 = bonds[2*i+1]
-    std::vector<FLOAT_PREC> r1 = getPosition(atom1);
-    std::vector<FLOAT_PREC> r2 = getPosition(atom2);
-    std::vector<FLOAT_PREC> r12(3);
+    int atom1 = bonds[2*i];
+    int atom2 = bonds[2*i+1];
+    std::vector<double> r1 = getPosition(atom1);
+    std::vector<double> r2 = getPosition(atom2);
+    std::vector<double> r12(3);
     if(!nopbc) {
         r12 = pbcDistance(r1,r2);
       } else{
@@ -125,41 +125,47 @@ void LinearDipole::calculate()
           r12[j] = r2[j] - r1[j];
           };
       }
-    std::vector<FLOAT_PREC> born_tensor(borns.begin()+ odim*3*i, borns.begin()+odim*3*(i+1));
     for(unsigned j = 0; j < odim; ++j) {
+      std::vector<double> born_vector(borns.begin() + odim*3*i + 3*j, borns.begin() + odim*3*i + 3*(j+1)); // borns[idx_bond, j, *]
+      // this bond's contribution to the force = - d(dipole)/dr
       for(unsigned k = 0; k < 3; ++k) {
-        _dipole[j] += born_tensor[3*j+k] * r12[k];  //  dipole[j] = born@(r2-r1)
-        _force [j*adof + 3*atom2+k] -= born_tensor[3*j+k] //  F[j, atom2, k] += - d(dipole[j])/d(r2[k]) 
-        _force [j*adof + 3*atom1+k] += born_tensor[3*j+k] //  F[j, atom1, k] += - d(dipole[j])/d(r1[k]) 
-        for(unsigned l = 0; l < 3; ++l) {
-          _virial[j, k, l] = 
-          }
+        _dipole[j] += born_vector[k] * r12[k];  //  dipole[j] = born@(r2-r1)
+        _force [j*adof + 3*atom2+k] -= born_vector[k]; //  F[j, atom2, k] += - d(dipole[j])/d(r2[k]) 
+        _force [j*adof + 3*atom1+k] += born_vector[k]; //  F[j, atom1, k] += - d(dipole[j])/d(r1[k]) 
         }
+      // this bond's contribution to the virial v = r x F
+      for(unsigned k = 0; k < 3; ++k) {
+        for(unsigned l = 0; l < 3; ++l) {
+          _virial[j*9 + k*3 + l] -= r12[k] * born_vector[l];    // virial[idx_odim,k,l] += (r2-r1)[k] * borns[idx_bond,  idx_odim, l]
+          }
       }
     }
-  // get  dipole
+  }
+  // get global dipole
   for (unsigned j = 0; j < ODIM; ++j) {
     getPntrToComponent(j)->set(_dipole[j]);
   };
-  // get  force
+  // get atomic detivative = minus force
   for (unsigned j = 0; j < ODIM; ++j) {
     for(unsigned n = 0; n < natoms; ++n) {
       setAtomsDerivatives(
-        getPntrToComponent(j), 
-        n,
-        Vector(_force[j*adof + 3*n + 0],
-               _force[j*adof + 3*n + 1], 
-               _force[j*adof + 3*n + 2]) 
+        getPntrToComponent(j), n,
+        - Vector(_force[j*adof + 3*n + 0],
+                 _force[j*adof + 3*n + 1], 
+                 _force[j*adof + 3*n + 2])
       );
     };
   };
-  // get stress
+  // get box derivative = minus virial
   for (unsigned j = 0; j < ODIM; ++j) {
+    
     setBoxDerivatives(
-      getPntrToComponent(j),
-      Tensor(_virial[j])
+      getPntrToComponent(j), // what is plumed's convention?
+      - Tensor(_virial[j*9 +0], _virial[j*9 +1], _virial[j*9 +2],
+               _virial[j*9 +3], _virial[j*9 +4], _virial[j*9 +5],
+               _virial[j*9 +6], _virial[j*9 +7], _virial[j*9 +8])
+    );
   };
-
 }
 
 

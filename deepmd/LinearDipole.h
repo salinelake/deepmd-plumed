@@ -40,7 +40,7 @@ class LinearDipole : public Colvar {
   bool nopbc;
   int  odim = ODIM;
   std::vector<int> bonds;
-  std::vector<FLOAT_PREC> borns;
+  std::vector<double> borns;
 public:
   explicit LinearDipole (const ActionOptions&);
   void calculate () override;
@@ -50,7 +50,7 @@ protected:
 private:
   void load_bonds(std::vector<int> & bonds, 
            const std::string & filename );
-  void load_borns(std::vector<FLOAT_PREC> & borns, 
+  void load_borns(std::vector<double> & borns, 
            const std::string & filename );
 
 };
