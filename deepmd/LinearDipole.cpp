@@ -3,9 +3,6 @@
 namespace PLMD {
 namespace colvar {
 
-// std::array<std::string, 3> 
-// LinearDipole::cpnts = {"x", "y", "z"};
-
 
 PLUMED_REGISTER_ACTION(LinearDipole,"LINEARDIPOLE")
 void
@@ -84,6 +81,7 @@ LinearDipole(const ActionOptions&ao):
 
   // load bonds topology
   load_bonds(bonds, bonds_file);
+  nbonds = bonds.size()/2;
   // log.printf("  assign bonds to atoms\n");
   // for(unsigned i = 0; i < bonds.size()/2; ++i) {
   //   log.printf(" (%d, %d) ", bonds[2*i], bonds[2*i+1]);
@@ -92,7 +90,7 @@ LinearDipole(const ActionOptions&ao):
 
   // load born tensor
   load_borns(borns, borns_file);
-  if (bonds.size()/2 != borns.size()/9){
+  if (nbonds != borns.size()/ odim /3){
     log.printf("#Bonds and #Borns tensor do not match");
   }
   log.printf("  assign Born tensor to bonds\n");
@@ -109,74 +107,149 @@ LinearDipole(const ActionOptions&ao):
   addComponentWithDerivatives("z"); componentIsNotPeriodic("z");
 
   requestAtoms(atoms);
+  natoms = getNumberOfAtoms();
+  adof = natoms * 3;  // atomic degrees of freedom
+}
+  
+Vector 
+LinearDipole::
+_get_distance(const std::vector< Vector >  & positions, int & a1, int & a2)
+{
+  Vector r1 = positions[a1];
+  Vector r2 = positions[a2];
+  // Vector r1 = getPosition(a1) ;
+  // Vector r2 = getPosition(a2) ;
+  Vector r12;
+  if(!nopbc) {
+      r12 = pbcDistance(r1,r2);
+    } else{
+      r12 = r2 - r1;
+    }
+  return r12;
 }
 
-// calculator
-void LinearDipole::calculate()
+void
+LinearDipole::
+_feed_plumed(std::vector<double> & dipole, std::vector<double> & force, std::vector<double> & virial)
 {
   unsigned natoms = getNumberOfAtoms();
-  unsigned nbonds = bonds.size()/2;
-  unsigned adof = natoms * 3;  // atomic degrees of freedom
-  std::vector<double> _dipole( odim, 0);
-  std::vector<double> _force ( odim * adof, 0);
-  std::vector<double> _virial( odim * 9, 0);
-  // iterate over all bonds, accumulate dipole, force and virial
-  for(unsigned i = 0; i < nbonds; ++i) {
-    int atom1 = bonds[2*i];
-    int atom2 = bonds[2*i+1];
-    Vector r1 = getPosition(atom1) ;
-    Vector r2 = getPosition(atom2) ;
-    Vector r12;
-    if(!nopbc) {
-        r12 = pbcDistance(r1,r2);
-      } else{
-        r12 = r2 - r1;
-      }
-    for(unsigned j = 0; j < odim; ++j) {
-      std::vector<double> born_vector(borns.begin() + odim*3*i + 3*j, borns.begin() + odim*3*i + 3*(j+1)); // borns[idx_bond, j, *]
-      // this bond's contribution to the force = - d(dipole)/dr
-      for(unsigned k = 0; k < 3; ++k) {
-        _dipole[j] += born_vector[k] * r12[k];  //  dipole[j] = born@(r2-r1)
-        _force [j*adof + 3*atom2+k] -= born_vector[k]; //  F[j, atom2, k] += - d(dipole[j])/d(r2[k]) 
-        _force [j*adof + 3*atom1+k] += born_vector[k]; //  F[j, atom1, k] += - d(dipole[j])/d(r1[k]) 
-        }
-      // this bond's contribution to the virial v = r x F
-      for(unsigned k = 0; k < 3; ++k) {
-        for(unsigned l = 0; l < 3; ++l) {
-          _virial[j*9 + k*3 + l] -= r12[k] * born_vector[l];    // virial[idx_odim,k,l] += (r2-r1)[k] * borns[idx_bond,  idx_odim, l]
-          }
-      }
-    }
-    // debug
-    // log.printf(" computing the bonds dipole of (%d, %d) \n", atom1, atom2);
-    // log.printf(" coordinates r1 = (%f, %f, %f), r2 = (%f, %f, %f) \n", r1[0],r1[1],r1[2], r2[0],r2[1],r2[2]);
-    // log.printf(" PBC_Distance r12 = (%f, %f, %f)  \n", r12[0],r12[1],r12[2] );
-    // log.printf(" current dipole = (%f, %f, %f)  \n", _dipole[0],_dipole[1],_dipole[2] );
-  }
-  // get global dipole
   for (unsigned j = 0; j < odim; ++j) {
-    getPntrToComponent(j)->set(_dipole[j]);
+    getPntrToComponent(j)->set(dipole[j]);
   };
   // get atomic detivative = minus force
   for (unsigned j = 0; j < odim; ++j) {
     for(unsigned n = 0; n < natoms; ++n) {
       setAtomsDerivatives(
         getPntrToComponent(j), n,
-        - Vector(_force[j*adof + 3*n + 0],
-                 _force[j*adof + 3*n + 1], 
-                 _force[j*adof + 3*n + 2])
+        - Vector(force[j*adof + 3*n + 0],
+                 force[j*adof + 3*n + 1], 
+                 force[j*adof + 3*n + 2])
       );
     };
   };
   // get box derivative = minus virial
   for (unsigned j = 0; j < odim; ++j) {
     setBoxDerivatives(
-      getPntrToComponent(j), // what is plumed's convention?
-      - Tensor(_virial[j*9 +0], _virial[j*9 +1], _virial[j*9 +2],
-               _virial[j*9 +3], _virial[j*9 +4], _virial[j*9 +5],
-               _virial[j*9 +6], _virial[j*9 +7], _virial[j*9 +8])
+      getPntrToComponent(j), 
+      - Tensor(virial[j*9 +0], virial[j*9 +1], virial[j*9 +2],
+               virial[j*9 +3], virial[j*9 +4], virial[j*9 +5],
+               virial[j*9 +6], virial[j*9 +7], virial[j*9 +8])
     );
   };
+}
+
+void 
+LinearDipole::
+calculate()
+{
+  unsigned nt=OpenMP::getNumThreads();
+  log.printf(" Using %d threads \n", nt);
+  const std::vector< Vector > positions = getPositions();
+  std::vector<double> dipole( odim, 0);
+  std::vector<double> force ( odim * adof, 0);
+  std::vector<double> virial( odim * 9, 0);  
+  if (nt==1){
+    for(unsigned i = 0; i < nbonds; ++i) {
+      _calculate_bond(i, positions, dipole, force, virial);
+    }  
+  }
+  else{
+    _calculate_omp(positions, dipole, force, virial);
+  }
+  _feed_plumed( dipole, force, virial);
+}
+
+void 
+LinearDipole::
+_calculate_omp(const std::vector< Vector >  & positions, std::vector<double> & dipole, std::vector<double> & force, std::vector<double> & virial)
+{
+  unsigned nt=OpenMP::getNumThreads();
+  std::vector<std::vector<double>> omp_force_allrank(nt);
+  double start = omp_get_wtime();
+  #pragma omp parallel num_threads(nt)
+  {
+    unsigned rank = OpenMP::getThreadNum();
+    std::vector<double> omp_dipole( odim, 0);
+    std::vector<double> omp_force ( odim * adof, 0);
+    std::vector<double> omp_virial( odim * 9, 0);  
+    // iterate over all bonds, accumulate dipole, force and virial
+    #pragma omp for
+    for(unsigned i = 0; i < nbonds; ++i) {
+      _calculate_bond(i, positions,  omp_dipole, omp_force, omp_virial);
+    }
+    if (rank==0) {log.printf(" -- OMP thread time = %f s  \n", omp_get_wtime() - start);}
+    // add up dipole and virial in serial, leave force for parallel reduction
+    #pragma omp critical
+    {
+      for(unsigned j = 0; j < odim; ++j) {
+        dipole[j] += omp_dipole[j];
+        for(unsigned k = 0; k < 9; ++k) {
+          virial[9*j+k] += omp_virial[9*j+k];
+          };
+      };
+    }
+    // initialize force buffer
+    omp_force_allrank[rank].resize(odim * adof);
+    for(unsigned n = 0; n < odim * adof; ++n) {
+      omp_force_allrank[rank][n] = omp_force[n];
+    }
+    // converge and sum with different for-loop schedule 
+    #pragma omp barrier
+    #pragma omp for
+    for(unsigned n = 0; n < odim * adof; ++n) {
+      for (unsigned j = 0; j < nt; ++j) {
+        force[n] += omp_force_allrank[j][n];
+      }
+    }
+  }
+  log.printf(" OMP total time = %f s  \n", omp_get_wtime() - start);
+}
+
+void 
+LinearDipole::
+_calculate_bond(unsigned & id_bond, const std::vector< Vector > & positions, std::vector<double> & _dipole, std::vector<double> & _force, std::vector<double> & _virial)
+{
+  int atom1 = bonds[2*id_bond];
+  int atom2 = bonds[2*id_bond+1];
+  Vector r12 = _get_distance( positions, atom1, atom2);
+  std::vector<double> born_tensor(
+    borns.begin() + odim*3 * id_bond, 
+    borns.begin() + odim*3 * (id_bond+1)
+    ); // borns[idx_bond, j, *]
+  for(unsigned j = 0; j < odim; ++j) {
+    ////////////////////   use plumed's Vector/Tensor class      ///////////////////////
+    Vector born_vector(born_tensor[3*j],born_tensor[3*j+1], born_tensor[3*j+2]);
+    Tensor bond_virial(-r12, born_vector);
+    _dipole[j] += dotProduct(born_vector, r12);
+    // this bond's contribution to the virial v = r x F
+    for(unsigned k = 0; k < 3; ++k) {
+      _force [j*adof + 3*atom2+k] -= born_vector[k]; //  F[j, atom2, k] += - d(dipole[j])/d(r2[k]) 
+      _force [j*adof + 3*atom1+k] += born_vector[k]; //  F[j, atom1, k] += - d(dipole[j])/d(r1[k]) 
+      for(unsigned l = 0; l < 3; ++l) {
+        _virial[9*j + 3*k + l] += bond_virial[k][l];    // virial[idx_odim,k,l] += (r2-r1)[k] * borns[idx_bond,  idx_odim, l]
+        };
+    }
+  }
 }
 
 
